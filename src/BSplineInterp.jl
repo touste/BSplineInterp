@@ -32,12 +32,12 @@ struct FFTbuf{T, Tplan}
     pcol::Tplan
     prow::Tplan
     #Buffers
-    # kernel_x_buf::Vector{Vector{Complex{T}}}
-    # kernel_y_buf::Vector{Vector{Complex{T}}}
-    # slice_row_buf::Vector{Vector{T}}
-    # slice_col_buf::Vector{Vector{T}}
-    imfft_col_buf::Matrix{Complex{T}}
-    imfft_row_buf::Matrix{Complex{T}}
+    kernel_x_buf::Vector{Vector{Complex{T}}}
+    kernel_y_buf::Vector{Vector{Complex{T}}}
+    slice_row_buf::Vector{Vector{T}}
+    slice_col_buf::Vector{Vector{T}}
+    # imfft_col_buf::Matrix{Complex{T}}
+    # imfft_row_buf::Matrix{Complex{T}}
 end
 
 
@@ -55,13 +55,13 @@ function FFTbuf(im::AbstractMatrix{T}) where T
     kernel_y[end-1:end] .= KERNEL[1:2]
     kernel_y_fft = rfft(kernel_y)
 
-    pcol = plan_rfft(im, 1)
-    prow = plan_rfft(im, 2)
-    # pcol = plan_rfft(kernel_y, flags=FFTW.UNALIGNED)
-    # prow = plan_rfft(kernel_x, flags=FFTW.UNALIGNED)
+    #pcol = plan_rfft(im, 1)
+    #prow = plan_rfft(im, 2)
+    pcol = plan_rfft(kernel_y, flags=FFTW.UNALIGNED)
+    prow = plan_rfft(kernel_x, flags=FFTW.UNALIGNED)
 
-    # return FFTbuf{T, typeof(pcol)}(kernel_x_fft, kernel_y_fft, pcol, prow, [similar(kernel_x_fft) for _ in 1:Threads.nthreads()], [similar(kernel_y_fft) for _ in 1:Threads.nthreads()], [zeros(T, nc) for _ in 1:Threads.nthreads()], [zeros(T, nl) for _ in 1:Threads.nthreads()])
-    return FFTbuf{T, typeof(pcol)}(kernel_x_fft, kernel_y_fft, pcol, prow, Matrix{Complex{T}}(undef, div(nl,2)+1, nc), Matrix{Complex{T}}(undef, nl, div(nc,2)+1) )
+    return FFTbuf{T, typeof(pcol)}(kernel_x_fft, kernel_y_fft, pcol, prow, [similar(kernel_x_fft) for _ in 1:Threads.nthreads()], [similar(kernel_y_fft) for _ in 1:Threads.nthreads()], [zeros(T, nc) for _ in 1:Threads.nthreads()], [zeros(T, nl) for _ in 1:Threads.nthreads()])
+    # return FFTbuf{T, typeof(pcol)}(kernel_x_fft, kernel_y_fft, pcol, prow, Matrix{Complex{T}}(undef, div(nl,2)+1, nc), Matrix{Complex{T}}(undef, nl, div(nc,2)+1) )
 
 end
 
@@ -135,7 +135,7 @@ end
 
 
 
-function compute_bcoefs!(bcoefs, fftbuf, im::AbstractMatrix{T}) where T
+function compute_bcoefs2!(bcoefs, fftbuf, im::AbstractMatrix{T}) where T
 
     nl, nc = size(im)
 
@@ -155,7 +155,7 @@ end
 
 
 
-function compute_bcoefsbkp!(bcoefs, fftbuf, im::AbstractMatrix{T}) where T
+function compute_bcoefs!(bcoefs, fftbuf, im::AbstractMatrix{T}) where T
 
     nl, nc = size(im)
 
