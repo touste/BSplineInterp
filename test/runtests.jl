@@ -1,6 +1,6 @@
 using BSplineInterp
 
-using Images, OffsetArrays
+using Images, OffsetArrays, BenchmarkTools
 
 using Test
 
@@ -15,7 +15,7 @@ const im = Float32.(Gray.(load(joinpath(dirname(@__FILE__), "speckle.png"))))
 
     dx = 0.
     dy = 0.
-    newim = [itp(x,y) for x in axes(im)[2] .+ dx, y in axes(im)[1] .+ dy]
+    newim = [itp(x,y) for y in axes(im)[1] .+ dy, x in axes(im)[2] .+ dx]
 
 
     @test !(0 in (newim .≈ im)[begin+10:end-10,begin+10:end-10])
@@ -31,6 +31,7 @@ const im = Float32.(Gray.(load(joinpath(dirname(@__FILE__), "speckle.png"))))
 
 
     itp = interpolate!(itp, im)
+    @btime interpolate!($itp, $im)
     @test itpval == itp(100.5, 100.5)
 
     @test itp(-10.,-10.) == 0
@@ -50,9 +51,9 @@ end
 
     dx = 0.
     dy = 0.
-    newim = [itp(x,y) for x in axes(ofim)[2] .+ dx, y in axes(ofim)[1] .+ dy]
+    newim = [itp(x,y) for y in axes(ofim)[1] .+ dy, x in axes(ofim)[2] .+ dx]
 
-    @test !(0 in (newim .≈ ofim)[begin+10:end-10,begin+10:end-10])
+    @test !(0 in (newim .≈ ofim.parent)[begin+10:end-10,begin+10:end-10])
 
     gd = gradient(itp, 200.5,300.5)
     @test isfinite(gd[1])
@@ -63,7 +64,8 @@ end
     @test isfinite(itpgd[2])
     @test isfinite(itpgd[3])
 
-    itp = interpolate!(itp, im)
+    itp = interpolate!(itp, ofim)
+    @btime interpolate!($itp, $ofim)
     @test itpval == itp(200.5, 300.5)
 
     @test itp(-10.,-10.) == 0

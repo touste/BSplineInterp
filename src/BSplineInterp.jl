@@ -32,29 +32,36 @@ struct FFTbuf{T, Tplan}
     pcol::Tplan
     prow::Tplan
     #Buffers
-    kernel_x_buf::Vector{Vector{Complex{T}}}
-    kernel_y_buf::Vector{Vector{Complex{T}}}
-    slice_buf::Vector{Vector{T}}
+    # kernel_x_buf::Vector{Vector{Complex{T}}}
+    # kernel_y_buf::Vector{Vector{Complex{T}}}
+    # slice_row_buf::Vector{Vector{T}}
+    # slice_col_buf::Vector{Vector{T}}
+    imfft_col_buf::Matrix{Complex{T}}
+    imfft_row_buf::Matrix{Complex{T}}
 end
 
 
-function FFTbuf(nl, nc, T)
+function FFTbuf(im::AbstractMatrix{T}) where T
+
+    nl, nc = size(im)
 
     kernel_x = zeros(T, nc)
     kernel_x[1:3] .= KERNEL[3:5]
     kernel_x[end-1:end] .= KERNEL[1:2]
-    pcol = plan_rfft(kernel_x, flags=FFTW.UNALIGNED)
-    kernel_x_fft = Vector{Complex{T}}(undef, div(nc,2)+1)
-    mul!(kernel_x_fft, pcol, kernel_x)
+    kernel_x_fft = rfft(kernel_x)
 
     kernel_y = zeros(T, nl)
     kernel_y[1:3] .= KERNEL[3:5]
     kernel_y[end-1:end] .= KERNEL[1:2]
-    prow = plan_rfft(kernel_y, flags=FFTW.UNALIGNED)
-    kernel_y_fft = Vector{Complex{T}}(undef, div(nl,2)+1)
-    mul!(kernel_y_fft, prow, kernel_y)
+    kernel_y_fft = rfft(kernel_y)
 
-    return FFTbuf{T, typeof(pcol)}(kernel_x_fft, kernel_y_fft, pcol, prow, [similar(kernel_x_fft) for _ in 1:Threads.nthreads()], [similar(kernel_y_fft) for _ in 1:Threads.nthreads()], [zeros(T, nc) for _ in 1:Threads.nthreads()])
+    pcol = plan_rfft(im, 1)
+    prow = plan_rfft(im, 2)
+    # pcol = plan_rfft(kernel_y, flags=FFTW.UNALIGNED)
+    # prow = plan_rfft(kernel_x, flags=FFTW.UNALIGNED)
+
+    # return FFTbuf{T, typeof(pcol)}(kernel_x_fft, kernel_y_fft, pcol, prow, [similar(kernel_x_fft) for _ in 1:Threads.nthreads()], [similar(kernel_y_fft) for _ in 1:Threads.nthreads()], [zeros(T, nc) for _ in 1:Threads.nthreads()], [zeros(T, nl) for _ in 1:Threads.nthreads()])
+    return FFTbuf{T, typeof(pcol)}(kernel_x_fft, kernel_y_fft, pcol, prow, Matrix{Complex{T}}(undef, div(nl,2)+1, nc), Matrix{Complex{T}}(undef, nl, div(nc,2)+1) )
 
 end
 
@@ -78,31 +85,27 @@ end
 
 function interpolate(im::AbstractMatrix{T}) where T
 
-    nl, nc = size(im)
-
-    fftbuf = FFTbuf(nl, nc, T)
+    fftbuf = FFTbuf(im)
     bcoefs = similar(im)
-    interpcoefs = similar(im, SMatrix{6,6,T,36})
+    itpcoefs = similar(im, SMatrix{6,6,T,36})
 
     compute_bcoefs!(bcoefs, fftbuf, im)
-    compute_interpcoefs!(interpcoefs, bcoefs)
+    compute_itpcoefs!(itpcoefs, bcoefs)
 
-    return BSInterp(fftbuf, bcoefs, interpcoefs, axes(im))
+    return BSInterp(fftbuf, bcoefs, itpcoefs, axes(im))
 end
 
 
 function interpolate(ofim::OffsetArray{T}) where T
 
-    nl, nc = size(ofim)
-
-    fftbuf = FFTbuf(nl, nc, T)
+    fftbuf = FFTbuf(ofim)
     bcoefs = similar(ofim)
-    interpcoefs = similar(ofim, SMatrix{6,6,T,36})
+    itpcoefs = similar(ofim, SMatrix{6,6,T,36})
 
     compute_bcoefs!(bcoefs.parent, fftbuf, ofim.parent)
-    compute_interpcoefs!(interpcoefs.parent, bcoefs.parent)
+    compute_itpcoefs!(itpcoefs.parent, bcoefs.parent)
 
-    return BSInterp(fftbuf, bcoefs, interpcoefs, axes(ofim))
+    return BSInterp(fftbuf, bcoefs, itpcoefs, axes(ofim))
 end
 
 
@@ -112,9 +115,9 @@ function interpolate!(itp::BSInterp, im::AbstractMatrix{T}) where T
     @assert size(im)==size(itp.bcoefs)
 
     compute_bcoefs!(itp.bcoefs, itp.fftbuf, im)
-    compute_interpcoefs!(itp.interpcoefs, itp.bcoefs)
+    compute_itpcoefs!(itp.itpcoefs, itp.bcoefs)
 
-    return BSInterp(itp.fftbuf, itp.bcoefs, itp.interpcoefs, axes(im))
+    return BSInterp(itp.fftbuf, itp.bcoefs, itp.itpcoefs, axes(im))
 end
 
 
@@ -123,9 +126,9 @@ function interpolate!(itp::BSInterp, ofim::OffsetArray{T}) where T
     @assert size(ofim)==size(itp.bcoefs)
 
     compute_bcoefs!(itp.bcoefs.parent, itp.fftbuf, ofim.parent)
-    compute_interpcoefs!(itp.interpcoefs.parent, itp.bcoefs.parent)
+    compute_itpcoefs!(itp.itpcoefs.parent, itp.bcoefs.parent)
 
-    return BSInterp(itp.fftbuf, itp.bcoefs, itp.interpcoefs, axes(ofim))
+    return BSInterp(itp.fftbuf, itp.bcoefs, itp.itpcoefs, axes(ofim))
 end
 
 
@@ -136,29 +139,49 @@ function compute_bcoefs!(bcoefs, fftbuf, im::AbstractMatrix{T}) where T
 
     nl, nc = size(im)
 
+    mul!(fftbuf.imfft_row_buf, fftbuf.prow, im)
+    Threads.@threads for r in 1:size(fftbuf.imfft_row_buf, 1)
+        @views fftbuf.imfft_row_buf[r,:]./= fftbuf.kernel_x_fft
+    end
+    ldiv!(bcoefs, fftbuf.prow, fftbuf.imfft_row_buf)
+
+    mul!(fftbuf.imfft_col_buf, fftbuf.pcol, bcoefs)
+    Threads.@threads for c in 1:size(fftbuf.imfft_col_buf, 2)
+        @views fftbuf.imfft_col_buf[:,c]./= fftbuf.kernel_y_fft
+    end
+    ldiv!(bcoefs, fftbuf.pcol, fftbuf.imfft_col_buf)
+
+end
+
+
+
+function compute_bcoefsbkp!(bcoefs, fftbuf, im::AbstractMatrix{T}) where T
+
+    nl, nc = size(im)
+
     Threads.@threads for i in 1:nl
-        @views copy!(fftbuf.slice_buf[Threads.threadid()], im[i,:])
-        mul!(fftbuf.kernel_x_buf[Threads.threadid()], fftbuf.pcol, fftbuf.slice_buf[Threads.threadid()])
+        @views copy!(fftbuf.slice_row_buf[Threads.threadid()], im[i,:])
+        mul!(fftbuf.kernel_x_buf[Threads.threadid()], fftbuf.prow, fftbuf.slice_row_buf[Threads.threadid()])
         fftbuf.kernel_x_buf[Threads.threadid()] ./= fftbuf.kernel_x_fft
-        ldiv!(fftbuf.slice_buf[Threads.threadid()], fftbuf.pcol, fftbuf.kernel_x_buf[Threads.threadid()])
-        @views copy!(bcoefs[i,:], fftbuf.slice_buf[Threads.threadid()])
+        ldiv!(fftbuf.slice_row_buf[Threads.threadid()], fftbuf.prow, fftbuf.kernel_x_buf[Threads.threadid()])
+        @views copy!(bcoefs[i,:], fftbuf.slice_row_buf[Threads.threadid()])
     end
 
     Threads.@threads for i in 1:nc
-        @views mul!(fftbuf.kernel_y_buf[Threads.threadid()], fftbuf.prow, bcoefs[:,i])
+        @views mul!(fftbuf.kernel_y_buf[Threads.threadid()], fftbuf.pcol, bcoefs[:,i])
         fftbuf.kernel_y_buf[Threads.threadid()] ./= fftbuf.kernel_y_fft
-        @views ldiv!(bcoefs[:,i], fftbuf.prow, fftbuf.kernel_y_buf[Threads.threadid()])
+        @views ldiv!(bcoefs[:,i], fftbuf.pcol, fftbuf.kernel_y_buf[Threads.threadid()])
     end
 
 end
 
 
-function compute_interpcoefs!(interpcoefs, bcoefs)
+function compute_itpcoefs!(itpcoefs, bcoefs)
     nl, nc = size(bcoefs)
     Threads.@threads for j in 3:nc-3
         idx = -2:3
         @inbounds @simd for i in 3:nl-3
-            @views interpcoefs[i,j] = QK*SMatrix{6,6}(bcoefs[i .+ idx, j .+ idx])*QK'
+            @views itpcoefs[i,j] = QK*SMatrix{6,6}(bcoefs[i .+ idx, j .+ idx])*QK'
         end
     end
 end
