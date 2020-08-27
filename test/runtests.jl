@@ -30,7 +30,7 @@ for imn in imnames
             newim = [itp(x,y) for y in axes(im)[1] .+ dy, x in axes(im)[2] .+ dx]
 
 
-            @test !(0 in (newim .≈ imdata(im))[begin+10:end-10,begin+10:end-10])
+            @test maximum(abs.(newim.-imdata(im))[begin+10:end-10,begin+10:end-10])<1.e-4
 
             gd = gradient(itp, 100.5, 100.5)
             @test isfinite(gd[1])
