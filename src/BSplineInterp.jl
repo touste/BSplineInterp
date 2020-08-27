@@ -166,7 +166,7 @@ function compute_itpcoefs!(itpcoefs, bcoefs)
 end
 
 
-function (itp::BSInterp{Tdata, Tplan, Tbcoefs, Tcoefs, Tax})(x, y) where {Tdata, Tplan, Tbcoefs, Tcoefs, Tax}
+function (itp::BSInterp{Tdata,  Tplanrow, Tplancol, Tbcoefs, Tcoefs, Tax})(x, y) where {Tdata,  Tplanrow, Tplancol, Tbcoefs, Tcoefs, Tax}
 
     l, c = itp.axes
     
@@ -191,7 +191,7 @@ end
 
 
 
-function gradient(itp::BSInterp{Tdata, Tplan, Tbcoefs, Tcoefs, Tax}, x, y) where {Tdata, Tplan, Tbcoefs, Tcoefs, Tax}
+function gradient(itp::BSInterp{Tdata,  Tplanrow, Tplancol, Tbcoefs, Tcoefs, Tax}, x, y) where {Tdata,  Tplanrow, Tplancol, Tbcoefs, Tcoefs, Tax}
 
     l, c = itp.axes
     
@@ -218,7 +218,7 @@ end
 
 
 
-function itpandgradient(itp::BSInterp{Tdata, Tplan, Tbcoefs, Tcoefs, Tax}, x, y) where {Tdata, Tplan, Tbcoefs, Tcoefs, Tax}
+function itpandgradient(itp::BSInterp{Tdata,  Tplanrow, Tplancol, Tbcoefs, Tcoefs, Tax}, x, y) where {Tdata,  Tplanrow, Tplancol, Tbcoefs, Tcoefs, Tax}
 
     l, c = itp.axes
     
