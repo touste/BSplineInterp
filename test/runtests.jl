@@ -17,10 +17,10 @@ for imn in imnames
 
     for (name, im) in zip(["Regular Array", "Offset Array"], [imraw, OffsetArray(imraw, (10,10))])
 
+        itp = interpolate(im)
+
         testname = name*" with image: "*imn
         @testset "$testname" begin
-
-            itp = interpolate(im)
 
             itpval = itp(100.5, 100.5)
             @test isfinite(itpval)
@@ -43,12 +43,15 @@ for imn in imnames
 
 
             itp = interpolate!(itp, im)
-            @btime interpolate!($itp, $im)
+            
             @test itpval == itp(100.5, 100.5)
 
             @test itp(-10.,-10.) == 0
 
         end
+        println("Benchmark:")
+        @btime interpolate!($itp, $im)
+        println("")
     end
 
 end
