@@ -4,71 +4,53 @@ using Images, OffsetArrays, BenchmarkTools
 
 using Test
 
-const im = Float32.(Gray.(load(joinpath(dirname(@__FILE__), "speckle.png"))))
 
-@testset "Regular Array" begin
-
-    itp = interpolate(im)
-
-    itpval = itp(100.5, 100.5)
-    @test isfinite(itpval)
-
-    dx = 0.
-    dy = 0.
-    newim = [itp(x,y) for y in axes(im)[1] .+ dy, x in axes(im)[2] .+ dx]
+imdata(im::AbstractArray) = im
+imdata(im::OffsetArray) = im.parent
 
 
-    @test !(0 in (newim .≈ im)[begin+10:end-10,begin+10:end-10])
+imnames = ["small.png", "medium.png", "large.png"]
 
-    gd = gradient(itp, 100.5, 100.5)
-    @test isfinite(gd[1])
-    @test isfinite(gd[2])
+for imn in imnames
 
-    itpgd = itpandgradient(itp, 100.5, 100.5)
-    @test isfinite(itpgd[1])
-    @test isfinite(itpgd[2])
-    @test isfinite(itpgd[3])
+    imraw = Float32.(Gray.(load(joinpath(dirname(@__FILE__), imn))))
+
+    for (name, im) in zip(["Regular Array", "Offset Array"], [imraw, OffsetArray(imraw, (10,10))])
+
+        testname = name*" with image: "*imn
+        @testset "$testname" begin
+
+            itp = interpolate(im)
+
+            itpval = itp(100.5, 100.5)
+            @test isfinite(itpval)
+
+            dx = 0.
+            dy = 0.
+            newim = [itp(x,y) for y in axes(im)[1] .+ dy, x in axes(im)[2] .+ dx]
 
 
-    itp = interpolate!(itp, im)
-    @btime interpolate!($itp, $im)
-    @test itpval == itp(100.5, 100.5)
+            @test !(0 in (newim .≈ imdata(im))[begin+10:end-10,begin+10:end-10])
 
-    @test itp(-10.,-10.) == 0
+            gd = gradient(itp, 100.5, 100.5)
+            @test isfinite(gd[1])
+            @test isfinite(gd[2])
 
-end
+            itpgd = itpandgradient(itp, 100.5, 100.5)
+            @test isfinite(itpgd[1])
+            @test isfinite(itpgd[2])
+            @test isfinite(itpgd[3])
 
 
+            itp = interpolate!(itp, im)
+            @btime interpolate!($itp, $im)
+            @test itpval == itp(100.5, 100.5)
 
-@testset "Offset Array" begin
+            @test itp(-10.,-10.) == 0
 
-    ofim = OffsetArray(im, (200,100))
-
-    itp = interpolate(ofim)
-
-    itpval = itp(200.5, 300.5)
-    @test isfinite(itpval)
-
-    dx = 0.
-    dy = 0.
-    newim = [itp(x,y) for y in axes(ofim)[1] .+ dy, x in axes(ofim)[2] .+ dx]
-
-    @test !(0 in (newim .≈ ofim.parent)[begin+10:end-10,begin+10:end-10])
-
-    gd = gradient(itp, 200.5,300.5)
-    @test isfinite(gd[1])
-    @test isfinite(gd[2])
-
-    itpgd = itpandgradient(itp, 200.5, 300.5)
-    @test isfinite(itpgd[1])
-    @test isfinite(itpgd[2])
-    @test isfinite(itpgd[3])
-
-    itp = interpolate!(itp, ofim)
-    @btime interpolate!($itp, $ofim)
-    @test itpval == itp(200.5, 300.5)
-
-    @test itp(-10.,-10.) == 0
+        end
+    end
 
 end
+
 

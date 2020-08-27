@@ -25,19 +25,16 @@ const QK = @SMatrix [1/120  13/60  11/20 13/60  1/120 0;
 
 
 
-struct FFTbuf{T, Tplan}
-    #Read only
-    kernel_x_fft::Vector{Complex{T}}
-    kernel_y_fft::Vector{Complex{T}}
-    pcol::Tplan
-    prow::Tplan
-    #Buffers
-    kernel_x_buf::Vector{Vector{Complex{T}}}
-    kernel_y_buf::Vector{Vector{Complex{T}}}
-    slice_row_buf::Vector{Vector{T}}
-    slice_col_buf::Vector{Vector{T}}
-    # imfft_col_buf::Matrix{Complex{T}}
-    # imfft_row_buf::Matrix{Complex{T}}
+struct FFTbuf{T, Tplanrow, Tplancol}
+    # Read only
+    kernel_row_fft::Vector{Complex{T}} # FFT of row kernel
+    kernel_col_fft::Vector{Complex{T}} # FFT of column kernel
+    prow::Tplanrow # FFT plan for image rows
+    pcol::Tplancol # FFT plan for image columns
+    # Buffers
+    buf_kernel_row_fft::Vector{Vector{Complex{T}}} # Pre-allocated FFT row buffer
+    buf_kernel_col_fft::Vector{Vector{Complex{T}}} # Pre-allocated FFT column buffer
+    slice_row_buf::Vector{Vector{T}} # Pre-allocated row buffer
 end
 
 
@@ -45,29 +42,27 @@ function FFTbuf(im::AbstractMatrix{T}) where T
 
     nl, nc = size(im)
 
-    kernel_x = zeros(T, nc)
-    kernel_x[1:3] .= KERNEL[3:5]
-    kernel_x[end-1:end] .= KERNEL[1:2]
-    kernel_x_fft = rfft(kernel_x)
+    kernel_row = zeros(T, nc)
+    kernel_row[1:3] .= KERNEL[3:5]
+    kernel_row[end-1:end] .= KERNEL[1:2]
+    kernel_row_fft = rfft(kernel_row)
 
-    kernel_y = zeros(T, nl)
-    kernel_y[1:3] .= KERNEL[3:5]
-    kernel_y[end-1:end] .= KERNEL[1:2]
-    kernel_y_fft = rfft(kernel_y)
+    kernel_col = zeros(T, nl)
+    kernel_col[1:3] .= KERNEL[3:5]
+    kernel_col[end-1:end] .= KERNEL[1:2]
+    kernel_col_fft = rfft(kernel_col)
 
-    #pcol = plan_rfft(im, 1)
-    #prow = plan_rfft(im, 2)
-    pcol = plan_rfft(kernel_y, flags=FFTW.UNALIGNED)
-    prow = plan_rfft(kernel_x, flags=FFTW.UNALIGNED)
+    FFTW.set_num_threads(1)
+    pcol = plan_rfft(kernel_col, flags=FFTW.UNALIGNED)
+    prow = plan_rfft(kernel_row, flags=FFTW.UNALIGNED)
 
-    return FFTbuf{T, typeof(pcol)}(kernel_x_fft, kernel_y_fft, pcol, prow, [similar(kernel_x_fft) for _ in 1:Threads.nthreads()], [similar(kernel_y_fft) for _ in 1:Threads.nthreads()], [zeros(T, nc) for _ in 1:Threads.nthreads()], [zeros(T, nl) for _ in 1:Threads.nthreads()])
-    # return FFTbuf{T, typeof(pcol)}(kernel_x_fft, kernel_y_fft, pcol, prow, Matrix{Complex{T}}(undef, div(nl,2)+1, nc), Matrix{Complex{T}}(undef, nl, div(nc,2)+1) )
+    return FFTbuf{T, typeof(prow), typeof(pcol)}(kernel_row_fft, kernel_col_fft, prow, pcol, [similar(kernel_row_fft) for _ in 1:Threads.nthreads()], [similar(kernel_col_fft) for _ in 1:Threads.nthreads()], [similar(kernel_row) for _ in 1:Threads.nthreads()])
 
 end
 
 
-struct BSInterp{Tdata, Tplan, Tbcoefs, Tcoefs, Tax}
-    fftbuf::FFTbuf{Tdata, Tplan}
+struct BSInterp{Tdata, Tplanrow, Tplancol, Tbcoefs, Tcoefs, Tax}
+    fftbuf::FFTbuf{Tdata, Tplanrow, Tplancol}
     bcoefs::Tbcoefs
     itpcoefs::Tcoefs
     axes::Tax
@@ -135,42 +130,26 @@ end
 
 
 
-function compute_bcoefs2!(bcoefs, fftbuf, im::AbstractMatrix{T}) where T
-
-    nl, nc = size(im)
-
-    mul!(fftbuf.imfft_row_buf, fftbuf.prow, im)
-    Threads.@threads for r in 1:size(fftbuf.imfft_row_buf, 1)
-        @views fftbuf.imfft_row_buf[r,:]./= fftbuf.kernel_x_fft
-    end
-    ldiv!(bcoefs, fftbuf.prow, fftbuf.imfft_row_buf)
-
-    mul!(fftbuf.imfft_col_buf, fftbuf.pcol, bcoefs)
-    Threads.@threads for c in 1:size(fftbuf.imfft_col_buf, 2)
-        @views fftbuf.imfft_col_buf[:,c]./= fftbuf.kernel_y_fft
-    end
-    ldiv!(bcoefs, fftbuf.pcol, fftbuf.imfft_col_buf)
-
-end
-
-
-
 function compute_bcoefs!(bcoefs, fftbuf, im::AbstractMatrix{T}) where T
 
     nl, nc = size(im)
 
+    # Deconvolution along rows
+    # As we work along rows, it is more efficient to place each row in a vector first,
+    # process it then place it back to have contiguous memory
     Threads.@threads for i in 1:nl
         @views copy!(fftbuf.slice_row_buf[Threads.threadid()], im[i,:])
-        mul!(fftbuf.kernel_x_buf[Threads.threadid()], fftbuf.prow, fftbuf.slice_row_buf[Threads.threadid()])
-        fftbuf.kernel_x_buf[Threads.threadid()] ./= fftbuf.kernel_x_fft
-        ldiv!(fftbuf.slice_row_buf[Threads.threadid()], fftbuf.prow, fftbuf.kernel_x_buf[Threads.threadid()])
+        mul!(fftbuf.buf_kernel_row_fft[Threads.threadid()], fftbuf.prow, fftbuf.slice_row_buf[Threads.threadid()])
+        fftbuf.buf_kernel_row_fft[Threads.threadid()] ./= fftbuf.kernel_row_fft
+        ldiv!(fftbuf.slice_row_buf[Threads.threadid()], fftbuf.prow, fftbuf.buf_kernel_row_fft[Threads.threadid()])
         @views copy!(bcoefs[i,:], fftbuf.slice_row_buf[Threads.threadid()])
     end
 
+    # Deconvolution along columns
     Threads.@threads for i in 1:nc
-        @views mul!(fftbuf.kernel_y_buf[Threads.threadid()], fftbuf.pcol, bcoefs[:,i])
-        fftbuf.kernel_y_buf[Threads.threadid()] ./= fftbuf.kernel_y_fft
-        @views ldiv!(bcoefs[:,i], fftbuf.pcol, fftbuf.kernel_y_buf[Threads.threadid()])
+        @views mul!(fftbuf.buf_kernel_col_fft[Threads.threadid()], fftbuf.pcol, bcoefs[:,i])
+        fftbuf.buf_kernel_col_fft[Threads.threadid()] ./= fftbuf.kernel_col_fft
+        @views ldiv!(bcoefs[:,i], fftbuf.pcol, fftbuf.buf_kernel_col_fft[Threads.threadid()])
     end
 
 end
